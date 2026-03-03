@@ -1,9 +1,9 @@
 <script lang="ts">
-  import Select from "svelte-select";
-  import logo from "./assets/images/logo-universal.png";
+  import logo from "./assets/images/tibia-logo-artwork-top.gif";
+  import discordIcon from "./assets/images/discord.png";
+  import whatsappIcon from "./assets/images/whatsapp.png";
   import {
     ActiveDownload,
-    DownloadMaps,
     DownloadPercent,
     DownloadedBytes,
     DownloadedFiles,
@@ -16,10 +16,10 @@
     Update,
     Version,
   } from "../wailsjs/go/main/App.js";
+  import { BrowserOpenURL } from "../wailsjs/runtime/runtime";
   import { onMount } from "svelte";
   import PlayIcon from "./PlayIcon.svelte";
   import UpdateIcon from "./UpdateIcon.svelte";
-  import DownloadIcon from "./DownloadIcon.svelte";
   import SettingsIcon from "./SettingsIcon.svelte";
 
   export let openSettings: () => void;
@@ -36,8 +36,6 @@
   let downloadedFiles: number = 0;
   let downloadedBytes: number = 0;
   let activeDownload: string = "";
-
-  let mapKind = 0;
 
   let hasLocal = false;
 
@@ -66,31 +64,6 @@
       progress = await DownloadPercent();
 
       if (downloadedFiles === totalFiles) {
-        updating = false;
-        needsUpdate = false;
-        clearInterval(interval);
-      }
-    }, 1000);
-  }
-
-  function downloadMaps() {
-    if (mapKind == null) return;
-    totalFiles = 0;
-    totalBytes = 0;
-    downloadedBytes = 0;
-    downloadedFiles = 0;
-    void DownloadMaps(mapKind);
-    updating = true;
-
-    const interval = setInterval(async () => {
-      totalFiles = await TotalFiles();
-      totalBytes = await TotalBytes();
-      downloadedBytes = await DownloadedBytes();
-      downloadedFiles = await DownloadedFiles();
-      activeDownload = await ActiveDownload();
-      progress = await DownloadPercent();
-
-      if (progress === 100) {
         updating = false;
         needsUpdate = false;
         clearInterval(interval);
@@ -130,13 +103,18 @@
     Play(true);
   }
 
-  const mapTypes = [
-    { value: 0, label: "Full w/ markers" },
-    { value: 1, label: "Full w/o markers" },
-    { value: 2, label: "Overlayed w/ markers" },
-    { value: 3, label: "Overlayed w/o markers" },
-    { value: 4, label: "Overlayed w/ markers (+PoI)" },
-  ];
+  function openDiscord() {
+    BrowserOpenURL("https://discord.com/invite/QTe6xmj9hm");
+  }
+
+  function openWhatsapp() {
+    BrowserOpenURL("https://chat.whatsapp.com/CvtnrV94yeDGz7EKdhBpsa");
+  }
+
+  function openWebsite() {
+    BrowserOpenURL("https://otbaiak.com/");
+  }
+
 </script>
 
 <button class="settings" on:click={openSettings} disabled={updating}>
@@ -145,7 +123,7 @@
 <div>
   <img alt="Logo" id="logo" src={logo} />
   <div class="actions">
-    <div>
+    <div class="play-section">
       <h3>Play</h3>
       {#if updating}
         <button class="update" disabled>
@@ -175,8 +153,10 @@
               <PlayIcon />
               {#if hasLocal}
                 Remote
-              {:else}
+              {:else if version && version.trim().length > 0}
                 {version} + rev.{revision}
+              {:else}
+                Play
               {/if}
             </button>
             {#if hasLocal}
@@ -195,16 +175,15 @@
         </div>
       {/if}
     </div>
-    <div class="maps">
-      <h3>Maps</h3>
-      <div class="map-select">
-        <Select bind:justValue={mapKind} items={mapTypes} />
-      </div>
-      <button disabled={!ready || needsUpdate} on:click={downloadMaps}>
-        <DownloadIcon />
-        Download + Install Maps
+    <div class="community-links">
+      <button class="community" on:click={openDiscord} aria-label="Discord">
+        <img src={discordIcon} alt="Discord" />
+      </button>
+      <button class="community" on:click={openWhatsapp} aria-label="WhatsApp">
+        <img src={whatsappIcon} alt="WhatsApp" />
       </button>
     </div>
+    <button class="website-link" on:click={openWebsite}>www.OTBaiak.com</button>
   </div>
 
   {#if updating}
@@ -317,38 +296,61 @@
 
   .actions {
     display: flex;
-    flex-direction: row;
-    align-items: start;
-    gap: 8px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     width: 100%;
   }
 
-  .maps {
+  .play-section {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    justify-content: center;
   }
 
-  .map-select {
-    width: 200px;
-    --border-radius: 16px;
-    --list-border-radius: 16px;
-    --item-color: #4e3bf5;
-    --item-hover-color: #4e3bf5;
-    --placeholder-color: #4e3bf5;
-    --selected-item-color: #4e3bf5;
+  .community-links {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 8px;
+  }
+
+  button.community {
+    width: 44px;
+    height: 44px;
+    border-radius: 9999px;
+    padding: 0;
+    overflow: hidden;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  button.community img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 9999px;
+  }
+
+  button.website-link {
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin-top: 6px;
+    background: transparent;
+    box-shadow: none;
+    color: white;
+    font-size: 14px;
+    text-decoration: underline;
   }
 
   h3 {
     margin: 0;
     padding: 0;
     font-size: 16px;
-  }
-
-  .maps button {
-    width: 100%;
-    height: 24px;
-    background-color: #4e3bf5;
   }
 
   .withLocal {
