@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -203,6 +204,10 @@ func (a *App) Update() {
 		a.logger.Errorf("Error checking for updates: %v", err)
 	}
 
+	if len(files) > 0 {
+		a.markGenerationInstalled()
+	}
+
 	a.totalFiles = int64(len(files))
 	a.totalBytes = 0
 	a.downloadedFiles = 0
@@ -295,12 +300,26 @@ func (a *App) appDirectory() string {
 func (a *App) filesToUpdate() ([]File, error) {
 	var files []File
 	filesTocheck := append(a.assetsInfo.Files, a.clientInfo.Files...)
+	postInstall := fileExists(a.executable())
+
+	filteredFiles := make([]File, 0, len(filesTocheck))
+	for _, file := range filesTocheck {
+		if postInstall && shouldIgnoreAfterInstall(file.LocalFile) {
+			continue
+		}
+		filteredFiles = append(filteredFiles, file)
+	}
+
+	if a.generationChanged() {
+		a.logger.Infof("Generation changed from %s to %s, forcing full update", viper.GetString("installed_generation"), a.clientInfo.Generation)
+		return filteredFiles, nil
+	}
 
 	mutex := sync.Mutex{}
 	wg := sync.WaitGroup{}
-	wg.Add(len(filesTocheck))
+	wg.Add(len(filteredFiles))
 
-	for _, file := range filesTocheck {
+	for _, file := range filteredFiles {
 		go func(file File) {
 			defer wg.Done()
 
@@ -330,6 +349,28 @@ func (a *App) filesToUpdate() ([]File, error) {
 	wg.Wait()
 
 	return files, nil
+}
+
+func shouldIgnoreAfterInstall(localFile string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(filepath.ToSlash(localFile)))
+	normalized = strings.TrimPrefix(normalized, "./")
+
+	ignoredPrefixes := []string{
+		"sounds/",
+		"screenshots/",
+		"minimap/",
+		"log/",
+		"characterdata/",
+		"cache/",
+	}
+
+	for _, prefix := range ignoredPrefixes {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func fileExists(path string) bool {
@@ -497,6 +538,29 @@ func (a *App) localExecutable() string {
 	return filepath.Join(a.appDirectory(), name)
 }
 
+func (a *App) generationChanged() bool {
+	remoteGeneration := strings.TrimSpace(a.clientInfo.Generation)
+	if remoteGeneration == "" {
+		return false
+	}
+
+	installedGeneration := strings.TrimSpace(viper.GetString("installed_generation"))
+	if installedGeneration == "" {
+		return false
+	}
+
+	return installedGeneration != remoteGeneration
+}
+
+func (a *App) markGenerationInstalled() {
+	remoteGeneration := strings.TrimSpace(a.clientInfo.Generation)
+	if remoteGeneration == "" {
+		return
+	}
+	viper.Set("installed_generation", remoteGeneration)
+	a.saveConfig()
+}
+
 func (a *App) executable() string {
 	return filepath.Join(a.appDirectory(), a.clientInfo.Executable)
 }
@@ -508,9 +572,9 @@ func (a *App) Play(local bool) {
 	}
 	a.logger.Infof("Launching %s", executable)
 	os.Chmod(a.executable(), 0755)
-	if err := syscall.Exec(executable, []string{"--battleeye"}, os.Environ()); err != nil {
+	if err := syscall.Exec(executable, []string{executable}, os.Environ()); err != nil {
 		a.logger.Errorf("Failed to launch %s: %s | attempting regular fork", executable, err)
-		cmd := exec.Command(executable, "--battleeye")
+		cmd := exec.Command(executable)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Env = os.Environ()

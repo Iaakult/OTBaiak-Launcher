@@ -140,8 +140,8 @@ func main() {
 		fmt.Printf("Failed to get executable path: %v", err)
 		os.Exit(1)
 	}
-	executable = filepath.Base(executable)
-	appName := strings.TrimSuffix(executable, filepath.Ext(executable))
+	executable = strings.TrimSuffix(filepath.Base(executable), filepath.Ext(executable))
+	appName := "OTBaiak"
 
 	if err := os.MkdirAll(configDirectory(appName), 0755); err != nil {
 		fmt.Printf("Failed to create config directory: %v", err)
