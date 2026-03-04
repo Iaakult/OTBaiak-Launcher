@@ -133,15 +133,56 @@ func doUpdate(logger *logrus.Logger, url string) error {
 	return nil
 }
 
+func ensureWindowsDesktopLauncherCopy(executablePath string, appName string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	desktopDir := filepath.Join(homeDir, "Desktop")
+	if err := os.MkdirAll(desktopDir, 0755); err != nil {
+		return
+	}
+
+	destinationPath := filepath.Join(desktopDir, appName+".exe")
+	if fileExists(destinationPath) {
+		return
+	}
+
+	sourceFile, err := os.Open(executablePath)
+	if err != nil {
+		return
+	}
+	defer sourceFile.Close()
+
+	destinationFile, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0755)
+	if err != nil {
+		return
+	}
+	defer destinationFile.Close()
+
+	if _, err := io.Copy(destinationFile, sourceFile); err != nil {
+		_ = os.Remove(destinationPath)
+		return
+	}
+}
+
 func main() {
 	baseURL := "https://raw.githubusercontent.com/Iaakult/OTBaiak-Client/main/"
-	executable, err := os.Executable()
+	executablePath, err := os.Executable()
 	if err != nil {
 		fmt.Printf("Failed to get executable path: %v", err)
 		os.Exit(1)
 	}
-	executable = strings.TrimSuffix(filepath.Base(executable), filepath.Ext(executable))
 	appName := "OTBaiak"
+
+	ensureWindowsDesktopLauncherCopy(executablePath, appName)
+
+	executable := strings.TrimSuffix(filepath.Base(executablePath), filepath.Ext(executablePath))
 
 	if err := os.MkdirAll(configDirectory(appName), 0755); err != nil {
 		fmt.Printf("Failed to create config directory: %v", err)
