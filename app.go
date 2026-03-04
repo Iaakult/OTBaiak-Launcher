@@ -46,6 +46,13 @@ type ClientInfo struct {
 	Variant    string `json:"variant"`
 }
 
+type ReleaseInfo struct {
+	Revision   *int   `json:"revision"`
+	Version    string `json:"version"`
+	Generation string `json:"generation"`
+	Variant    string `json:"variant"`
+}
+
 type App struct {
 	ctx     context.Context
 	logger  *logrus.Logger
@@ -108,6 +115,28 @@ func (a *App) remoteAssetsJSON() string {
 	return "assets." + a.OS() + ".json"
 }
 
+func (a *App) remoteVersionJSON() string {
+	return "version.json"
+}
+
+func (a *App) applyReleaseInfo(releaseInfo ReleaseInfo) {
+	if strings.TrimSpace(releaseInfo.Version) != "" {
+		a.clientInfo.Version = strings.TrimSpace(releaseInfo.Version)
+	}
+
+	if releaseInfo.Revision != nil {
+		a.clientInfo.Revision = *releaseInfo.Revision
+	}
+
+	if strings.TrimSpace(releaseInfo.Generation) != "" {
+		a.clientInfo.Generation = strings.TrimSpace(releaseInfo.Generation)
+	}
+
+	if strings.TrimSpace(releaseInfo.Variant) != "" {
+		a.clientInfo.Variant = strings.TrimSpace(releaseInfo.Variant)
+	}
+}
+
 func (a *App) refreshManifests() {
 	err := a.downloadFile(a.baseURL+a.remoteClientJSON(), "client.json", false)
 	if err != nil {
@@ -127,6 +156,17 @@ func (a *App) refreshManifests() {
 	err = readJSON(filepath.Join(a.appDirectory(), "assets.json"), &a.assetsInfo)
 	if err != nil {
 		a.logger.Errorf("Error reading %s: %v", "assets.json", err)
+	}
+
+	err = a.downloadFile(a.baseURL+a.remoteVersionJSON(), "version.json", false)
+	if err == nil {
+		var releaseInfo ReleaseInfo
+		err = readJSON(filepath.Join(a.appDirectory(), "version.json"), &releaseInfo)
+		if err != nil {
+			a.logger.Errorf("Error reading %s: %v", "version.json", err)
+		} else {
+			a.applyReleaseInfo(releaseInfo)
+		}
 	}
 }
 
