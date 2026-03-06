@@ -46,8 +46,20 @@ export function Play(arg1) {
   return window['go']['main']['App']['Play'](arg1);
 }
 
+export function Profiles() {
+  return window['go']['main']['App']['Profiles']();
+}
+
 export function Revision() {
   return window['go']['main']['App']['Revision']();
+}
+
+export function SelectProfile(arg1) {
+  return window['go']['main']['App']['SelectProfile'](arg1);
+}
+
+export function SelectedProfile() {
+  return window['go']['main']['App']['SelectedProfile']();
 }
 
 export function ToggleLocal(arg1) {

@@ -10,7 +10,10 @@
     LocalEnabled,
     NeedsUpdate,
     Play,
+    Profiles,
     Revision,
+    SelectProfile,
+    SelectedProfile,
     TotalBytes,
     TotalFiles,
     Update,
@@ -24,11 +27,18 @@
 
   export let openSettings: () => void;
 
+  type LauncherProfile = {
+    key: string;
+    name: string;
+  };
+
   let version: string = "";
   let revision: number = 0;
   let updating: boolean = false;
   let ready: boolean = false;
   let needsUpdate: boolean = false;
+  let profiles: LauncherProfile[] = [];
+  let selectedProfile: string = "";
 
   let progress: number = 0;
   let totalFiles: number = 0;
@@ -39,13 +49,46 @@
 
   let hasLocal = false;
 
-  onMount(async () => {
+  async function refreshStatus() {
     revision = await Revision();
     version = await Version();
     needsUpdate = await NeedsUpdate();
-    ready = true;
     hasLocal = await LocalEnabled();
+    ready = true;
+  }
+
+  onMount(async () => {
+    profiles = await Profiles();
+    selectedProfile = await SelectedProfile();
+
+    if (!selectedProfile && profiles.length > 0) {
+      const firstProfile = profiles[0]?.key;
+      if (firstProfile) {
+        const ok = await SelectProfile(firstProfile);
+        if (ok) {
+          selectedProfile = firstProfile;
+        }
+      }
+    }
+
+    await refreshStatus();
   });
+
+  async function changeProfile(key: string) {
+    if (updating || key === selectedProfile) {
+      return;
+    }
+
+    ready = false;
+    const ok = await SelectProfile(key);
+    if (!ok) {
+      ready = true;
+      return;
+    }
+
+    selectedProfile = key;
+    await refreshStatus();
+  }
 
   function update() {
     totalFiles = 0;
@@ -125,6 +168,18 @@
   <div class="actions">
     <div class="play-section">
       <h3>Play</h3>
+      <div class="profile-picker">
+        {#each profiles as profile}
+          <button
+            class="profile"
+            class:selected={profile.key === selectedProfile}
+            on:click={() => changeProfile(profile.key)}
+            disabled={updating || !ready}
+          >
+            {profile.name}
+          </button>
+        {/each}
+      </div>
       {#if updating}
         <button class="update" disabled>
           <div>
@@ -261,6 +316,26 @@
     flex-direction: row;
     align-items: center;
     justify-content: center;
+  }
+
+  .profile-picker {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  button.profile {
+    width: 180px;
+    height: 44px;
+    font-size: 14px;
+    background-color: #1f1f1f;
+    border: 1px solid #3a3a3a;
+  }
+
+  button.profile.selected {
+    background-color: #016f4e;
+    border-color: #03a06f;
   }
 
   button.update {
