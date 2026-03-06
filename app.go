@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"net/http"
 	"os"
 	"os/exec"
@@ -361,7 +362,7 @@ func (a *App) Update() {
 					a.mutex.Lock()
 					a.activeDownloads[file.URL] = struct{}{}
 					a.mutex.Unlock()
-					err := a.downloadFile(a.currentProfile().BaseURL+file.URL, file.LocalFile, true)
+					err := a.downloadFile(a.resolveRemoteFileURL(file.URL), file.LocalFile, true)
 					a.mutex.Lock()
 					delete(a.activeDownloads, file.URL)
 					a.mutex.Unlock()
@@ -378,6 +379,27 @@ func (a *App) Update() {
 	for _, file := range files {
 		a.queue <- file
 	}
+}
+
+func escapeURLPath(path string) string {
+	parts := strings.Split(path, "/")
+	for index, part := range parts {
+		parts[index] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+func (a *App) resolveRemoteFileURL(resource string) string {
+	trimmed := strings.TrimSpace(resource)
+	if trimmed == "" {
+		return a.currentProfile().BaseURL
+	}
+
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		return trimmed
+	}
+
+	return a.currentProfile().BaseURL + escapeURLPath(trimmed)
 }
 
 var mapKinds = map[int]string{
