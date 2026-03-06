@@ -51,13 +51,31 @@ type ReleaseInfo struct {
 	Version    string `json:"version"`
 	Generation string `json:"generation"`
 	Variant    string `json:"variant"`
+	AssetsBundleURL    string `json:"assets_bundle_url"`
+	AssetsBundleSHA256 string `json:"assets_bundle_sha256"`
+	AssetsBundleURLs   []string `json:"assets_bundle_urls"`
+	AssetsBundleSHA256List []string `json:"assets_bundle_sha256_list"`
+}
+
+type LaunchProfile struct {
+	Key           string `json:"key"`
+	Name          string `json:"name"`
+	BaseURL       string `json:"-"`
+	DirectoryName string `json:"-"`
+	BundleCleanupPaths []string `json:"-"`
 }
 
 type App struct {
 	ctx     context.Context
 	logger  *logrus.Logger
-	baseURL string
 	appName string
+
+	profiles           []LaunchProfile
+	selectedProfileKey string
+	assetsBundleURL    string
+	assetsBundleSHA256 string
+	assetsBundleURLs   []string
+	assetsBundleSHA256List []string
 
 	clientInfo ClientInfo
 	assetsInfo AssetsInfo
@@ -76,16 +94,79 @@ type App struct {
 	cancel chan struct{}
 }
 
-func NewApp(logger *logrus.Logger, baseURL string, appName string, parallel int) *App {
+func NewApp(logger *logrus.Logger, appName string, parallel int, profiles []LaunchProfile) *App {
+	selectedProfile := ""
+	if len(profiles) > 0 {
+		selectedProfile = profiles[0].Key
+	}
+
 	return &App{
 		logger:          logger,
-		baseURL:         baseURL,
 		queue:           make(chan File, 16),
 		cancel:          make(chan struct{}),
 		activeDownloads: make(map[string]struct{}),
 		parallel:        parallel,
 		appName:         appName,
+		profiles:        profiles,
+		selectedProfileKey: selectedProfile,
 	}
+}
+
+func (a *App) profileByKey(key string) (LaunchProfile, bool) {
+	for _, profile := range a.profiles {
+		if profile.Key == key {
+			return profile, true
+		}
+	}
+	return LaunchProfile{}, false
+}
+
+func (a *App) currentProfile() LaunchProfile {
+	if profile, ok := a.profileByKey(a.selectedProfileKey); ok {
+		return profile
+	}
+	if len(a.profiles) > 0 {
+		return a.profiles[0]
+	}
+	return LaunchProfile{}
+}
+
+func (a *App) Profiles() []LaunchProfile {
+	return a.profiles
+}
+
+func (a *App) SelectedProfile() string {
+	return a.selectedProfileKey
+}
+
+func (a *App) SelectProfile(key string) bool {
+	if _, ok := a.profileByKey(key); !ok {
+		return false
+	}
+	a.selectedProfileKey = key
+	a.clientInfo = ClientInfo{}
+	a.assetsInfo = AssetsInfo{}
+	return true
+}
+
+func (a *App) installedGenerationKey() string {
+	return "installed_generation_" + a.selectedProfileKey
+}
+
+func (a *App) localEnabledKey() string {
+	return "enableLocal_" + a.selectedProfileKey
+}
+
+func (a *App) assetsBundleHashKey() string {
+	return "installed_assets_bundle_sha256_" + a.selectedProfileKey
+}
+
+func (a *App) resolveRemoteURL(resource string) string {
+	trimmed := strings.TrimSpace(resource)
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		return trimmed
+	}
+	return a.currentProfile().BaseURL + trimmed
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -135,10 +216,16 @@ func (a *App) applyReleaseInfo(releaseInfo ReleaseInfo) {
 	if strings.TrimSpace(releaseInfo.Variant) != "" {
 		a.clientInfo.Variant = strings.TrimSpace(releaseInfo.Variant)
 	}
+
+	a.assetsBundleURL = strings.TrimSpace(releaseInfo.AssetsBundleURL)
+	a.assetsBundleSHA256 = strings.TrimSpace(releaseInfo.AssetsBundleSHA256)
+	a.assetsBundleURLs = releaseInfo.AssetsBundleURLs
+	a.assetsBundleSHA256List = releaseInfo.AssetsBundleSHA256List
 }
 
 func (a *App) refreshManifests() {
-	err := a.downloadFile(a.baseURL+a.remoteClientJSON(), "client.json", false)
+	baseURL := a.currentProfile().BaseURL
+	err := a.downloadFile(baseURL+a.remoteClientJSON(), "client.json", false)
 	if err != nil {
 		a.logger.Errorf("Error downloading %s: %v", a.remoteClientJSON(), err)
 	}
@@ -148,7 +235,7 @@ func (a *App) refreshManifests() {
 		a.logger.Errorf("Error reading %s: %v", "client.json", err)
 	}
 
-	err = a.downloadFile(a.baseURL+a.remoteAssetsJSON(), "assets.json", false)
+	err = a.downloadFile(baseURL+a.remoteAssetsJSON(), "assets.json", false)
 	if err != nil {
 		a.logger.Errorf("Error downloading %s: %v", a.remoteAssetsJSON(), err)
 	}
@@ -158,7 +245,7 @@ func (a *App) refreshManifests() {
 		a.logger.Errorf("Error reading %s: %v", "assets.json", err)
 	}
 
-	err = a.downloadFile(a.baseURL+a.remoteVersionJSON(), "version.json", false)
+	err = a.downloadFile(baseURL+a.remoteVersionJSON(), "version.json", false)
 	if err == nil {
 		var releaseInfo ReleaseInfo
 		err = readJSON(filepath.Join(a.appDirectory(), "version.json"), &releaseInfo)
@@ -207,7 +294,7 @@ func (a *App) DownloadedBytes() int64 {
 
 func (a *App) ToggleLocal(value bool) {
 	a.logger.Infof("Setting enableLocal to %v", value)
-	viper.Set("enableLocal", value)
+	viper.Set(a.localEnabledKey(), value)
 	a.saveConfig()
 }
 
@@ -218,7 +305,7 @@ func (a *App) saveConfig() {
 }
 
 func (a *App) LocalEnabled() bool {
-	return viper.GetBool("enableLocal")
+	return viper.GetBool(a.localEnabledKey())
 }
 
 func (a *App) OS() string {
@@ -239,6 +326,12 @@ func (a *App) ActiveDownload() string {
 }
 
 func (a *App) Update() {
+	a.refreshManifests()
+
+	if err := a.applyAssetsBundleIfNeeded(); err != nil {
+		a.logger.Errorf("Error applying assets bundle: %v", err)
+	}
+
 	files, err := a.filesToUpdate()
 	if err != nil {
 		a.logger.Errorf("Error checking for updates: %v", err)
@@ -268,7 +361,7 @@ func (a *App) Update() {
 					a.mutex.Lock()
 					a.activeDownloads[file.URL] = struct{}{}
 					a.mutex.Unlock()
-					err := a.downloadFile(a.baseURL+file.URL, file.LocalFile, true)
+					err := a.downloadFile(a.currentProfile().BaseURL+file.URL, file.LocalFile, true)
 					a.mutex.Lock()
 					delete(a.activeDownloads, file.URL)
 					a.mutex.Unlock()
@@ -316,6 +409,9 @@ func (a *App) DownloadMaps(kind int) {
 
 func (a *App) NeedsUpdate() bool {
 	a.refreshManifests()
+	if a.assetsBundleNeedsApply() {
+		return true
+	}
 	files, err := a.filesToUpdate()
 	if err != nil {
 		a.logger.Errorf("Error checking for updates: %v", err)
@@ -330,9 +426,13 @@ func (a *App) appDirectory() string {
 		a.logger.Errorf("Error getting config directory: %v", err)
 		return ""
 	}
-	appName := a.appName
+	profile := a.currentProfile()
+	appName := profile.DirectoryName
+	if strings.TrimSpace(appName) == "" {
+		appName = a.appName
+	}
 	if a.OS() == "mac" {
-		appName = a.appName + ".app"
+		appName = appName + ".app"
 	}
 	return filepath.Join(configDir, appName)
 }
@@ -351,7 +451,7 @@ func (a *App) filesToUpdate() ([]File, error) {
 	}
 
 	if a.generationChanged() {
-		a.logger.Infof("Generation changed from %s to %s, forcing full update", viper.GetString("installed_generation"), a.clientInfo.Generation)
+		a.logger.Infof("Generation changed from %s to %s, forcing full update", viper.GetString(a.installedGenerationKey()), a.clientInfo.Generation)
 		return filteredFiles, nil
 	}
 
@@ -584,7 +684,7 @@ func (a *App) generationChanged() bool {
 		return false
 	}
 
-	installedGeneration := strings.TrimSpace(viper.GetString("installed_generation"))
+	installedGeneration := strings.TrimSpace(viper.GetString(a.installedGenerationKey()))
 	if installedGeneration == "" {
 		return false
 	}
@@ -597,12 +697,166 @@ func (a *App) markGenerationInstalled() {
 	if remoteGeneration == "" {
 		return
 	}
-	viper.Set("installed_generation", remoteGeneration)
+	viper.Set(a.installedGenerationKey(), remoteGeneration)
 	a.saveConfig()
 }
 
 func (a *App) executable() string {
 	return filepath.Join(a.appDirectory(), a.clientInfo.Executable)
+}
+
+func (a *App) assetsBundleNeedsApply() bool {
+	bundleURLs := a.currentAssetsBundleURLs()
+	bundleHashes := a.currentAssetsBundleHashes()
+	if len(bundleURLs) == 0 || len(bundleHashes) == 0 || len(bundleURLs) != len(bundleHashes) {
+		return false
+	}
+	installed := strings.TrimSpace(viper.GetString(a.assetsBundleHashKey()))
+	current := strings.Join(bundleHashes, ",")
+	return installed != current
+}
+
+func (a *App) currentAssetsBundleURLs() []string {
+	if len(a.assetsBundleURLs) > 0 {
+		result := make([]string, 0, len(a.assetsBundleURLs))
+		for _, value := range a.assetsBundleURLs {
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	}
+
+	bundleURL := strings.TrimSpace(a.assetsBundleURL)
+	if bundleURL == "" {
+		return nil
+	}
+	return []string{bundleURL}
+}
+
+func (a *App) currentAssetsBundleHashes() []string {
+	if len(a.assetsBundleSHA256List) > 0 {
+		result := make([]string, 0, len(a.assetsBundleSHA256List))
+		for _, value := range a.assetsBundleSHA256List {
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	}
+
+	bundleHash := strings.TrimSpace(a.assetsBundleSHA256)
+	if bundleHash == "" {
+		return nil
+	}
+	return []string{bundleHash}
+}
+
+func (a *App) applyAssetsBundleIfNeeded() error {
+	if !a.assetsBundleNeedsApply() {
+		return nil
+	}
+
+	bundleURLs := a.currentAssetsBundleURLs()
+	bundleHashes := a.currentAssetsBundleHashes()
+	if len(bundleURLs) != len(bundleHashes) {
+		return fmt.Errorf("assets bundle metadata mismatch")
+	}
+
+	cleanupPaths := a.currentBundleCleanupPaths()
+	for _, cleanupPath := range cleanupPaths {
+		targetPath := filepath.Join(a.appDirectory(), cleanupPath)
+		if err := os.RemoveAll(targetPath); err != nil {
+			return err
+		}
+	}
+
+	for index, rawURL := range bundleURLs {
+		bundleURL := a.resolveRemoteURL(rawURL)
+		bundleHash := strings.TrimSpace(bundleHashes[index])
+		a.logger.Infof("Applying assets bundle part %d/%d from %s", index+1, len(bundleURLs), bundleURL)
+
+		tmpFile, err := os.CreateTemp("", "assets-bundle-*.zip")
+		if err != nil {
+			return err
+		}
+		tmpPath := tmpFile.Name()
+		tmpFile.Close()
+
+		if err := a.downloadRawFile(bundleURL, tmpPath); err != nil {
+			os.Remove(tmpPath)
+			return err
+		}
+
+		digest, err := sha256Sum(tmpPath)
+		if err != nil {
+			os.Remove(tmpPath)
+			return err
+		}
+
+		if digest != bundleHash {
+			os.Remove(tmpPath)
+			return fmt.Errorf("assets bundle sha256 mismatch for %s: expected %s got %s", bundleURL, bundleHash, digest)
+		}
+
+		if err := unzip(tmpPath, a.appDirectory()); err != nil {
+			os.Remove(tmpPath)
+			return err
+		}
+
+		os.Remove(tmpPath)
+	}
+
+	viper.Set(a.assetsBundleHashKey(), strings.Join(bundleHashes, ","))
+	a.saveConfig()
+	return nil
+}
+
+func (a *App) currentBundleCleanupPaths() []string {
+	profile := a.currentProfile()
+	if len(profile.BundleCleanupPaths) == 0 {
+		return []string{"assets"}
+	}
+
+	result := make([]string, 0, len(profile.BundleCleanupPaths))
+	for _, value := range profile.BundleCleanupPaths {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	if len(result) == 0 {
+		return []string{"assets"}
+	}
+
+	return result
+}
+
+func (a *App) downloadRawFile(url, dst string) error {
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %s", resp.Status)
+	}
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (a *App) Play(local bool) {

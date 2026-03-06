@@ -243,7 +243,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	app := NewApp(logger, baseURL, appName, parallel)
+	profiles := []LaunchProfile{
+		{
+			Key:           "tibia-15-11",
+			Name:          "Tibia 15.11",
+			BaseURL:       "https://raw.githubusercontent.com/Iaakult/OTBaiak-Client/main/",
+			DirectoryName: "OTBaiak",
+			BundleCleanupPaths: []string{"assets"},
+		},
+		{
+			Key:           "otc-com-bot",
+			Name:          "OTC com BOT",
+			BaseURL:       "https://raw.githubusercontent.com/Iaakult/OTC-com-BOT/main/",
+			DirectoryName: "OTBaiak-OTC",
+			BundleCleanupPaths: []string{"data/things/1511"},
+		},
+	}
+
+	if configuredBaseURL := strings.TrimSpace(viper.GetString("base_url")); configuredBaseURL != "" {
+		profiles[0].BaseURL = configuredBaseURL
+	}
+
+	app := NewApp(logger, appName, parallel, profiles)
 
 	err = wails.Run(&options.App{
 		Title:  appName + " Launcher",
